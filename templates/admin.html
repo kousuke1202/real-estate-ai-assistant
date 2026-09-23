@@ -12,6 +12,14 @@
       <h3>お問い合わせ数</h3>
       <p>{{ inquiries|length }}</p>
     </div>
+    <div>
+      <h3>予約件数</h3>
+      <p>{{ reservations|length }}</p>
+    </div>
+    <div>
+      <h3>対応状況</h3>
+      <p>管理中</p>
+    </div>
   </div>
 </section>
 
@@ -45,5 +53,20 @@
       <p>問い合わせはまだありません。</p>
     {% endfor %}
   </div>
+</section>
+
+<section class="panel section-spacer">
+  <h2>内見予約一覧</h2>
+  {% for reservation in reservations %}
+    <div class="inquiry-item">
+      <p><strong>{{ reservation.name }}</strong> / {{ reservation.phone }}</p>
+      <p>物件: {{ reservation.property_name or '未選択' }}</p>
+      <p>希望日: {{ reservation.preferred_date }}</p>
+      <p>メモ: {{ reservation.note or 'なし' }}</p>
+      <p>状態: {{ reservation.status }}</p>
+    </div>
+  {% else %}
+    <p>予約はまだありません。</p>
+  {% endfor %}
 </section>
 {% endblock %}

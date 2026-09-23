@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="panel form-panel">
+  <h1>内見予約</h1>
+  <form action="{{ url_for('create_reservation') }}" method="post" class="property-form">
+    <label>
+      物件を選択
+      <select name="property_id" required>
+        <option value="">物件を選択してください</option>
+        {% for property in properties %}
+          <option value="{{ property.id }}">{{ property.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      お名前
+      <input type="text" name="name" required>
+    </label>
+
+    <label>
+      電話番号
+      <input type="tel" name="phone" required>
+    </label>
+
+    <label>
+      希望日
+      <input type="date" name="preferred_date" required>
+    </label>
+
+    <label>
+      備考
+      <textarea name="note" rows="4" placeholder="例: 10時以降が希望です。"></textarea>
+    </label>
+
+    <button type="submit">予約する</button>
+  </form>
+</section>
+{% endblock %}
