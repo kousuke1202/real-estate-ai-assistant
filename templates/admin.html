@@ -64,6 +64,15 @@
       <p>希望日: {{ reservation.preferred_date }}</p>
       <p>メモ: {{ reservation.note or 'なし' }}</p>
       <p>状態: {{ reservation.status }}</p>
+      <form action="{{ url_for('update_reservation_status', reservation_id=reservation.id) }}" method="post" class="status-form">
+        <select name="status">
+          <option value="pending" {% if reservation.status == 'pending' %}selected{% endif %}>未対応</option>
+          <option value="confirmed" {% if reservation.status == 'confirmed' %}selected{% endif %}>確定</option>
+          <option value="completed" {% if reservation.status == 'completed' %}selected{% endif %}>完了</option>
+          <option value="canceled" {% if reservation.status == 'canceled' %}selected{% endif %}>キャンセル</option>
+        </select>
+        <button type="submit">更新</button>
+      </form>
     </div>
   {% else %}
     <p>予約はまだありません。</p>

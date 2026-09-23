@@ -1,7 +1,12 @@
 from flask import Flask, render_template, request, redirect, url_for
 import os
 import sqlite3
+import smtplib
 from pathlib import Path
+from email.mime.text import MIMEText
+
+import requests
+from dotenv import load_dotenv
 
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -9,11 +14,21 @@ from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
 from linebot.v3.messaging.models import ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
+load_dotenv()
+
 app = Flask(__name__)
 DB_PATH = Path("data/real_estate.db")
 
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 LINE_CONFIGURATION = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN) if LINE_CHANNEL_ACCESS_TOKEN else None
 handler = WebhookHandler(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRET else None
 
@@ -59,6 +74,20 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            property_id INTEGER,
+            name TEXT NOT NULL,
+            phone TEXT,
+            preferred_date TEXT,
+            note TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     conn.commit()
     conn.close()
     seed_demo_properties()
@@ -72,7 +101,7 @@ def seed_demo_properties():
             """
             INSERT INTO properties (name, address, rent, layout, status, available_date, requirements, description)
             VALUES
-                ('レジデンス新宿101', '東京都新宿区西新宿1-1-1', '¥180,000 / 月', '2LDK', 'available', '2026-10-05', '収入条件あり、ペット不可、入居時期相談', '駅徒歩5分の2LDK。南向きで明るく、設備充実。'),
+                ('レジデンス新宿101', '東京都新宿区西新宿1-1-1', '¥180,000 / 月', '2LDK', 'available', '2026-10-05', '収入条件あり、ペ���ト不可、入居時期相談', '駅徒歩5分の2LDK。南向きで明るく、設備充実。'),
                 ('グリーンハイツ渋谷', '東京都渋谷区道玄坂2-4-8', '¥220,000 / 月', '3LDK', 'available', '2026-10-20', '事務所利用不可、入居時期相談', '都心に位置する3LDK。広いリビングと洗練された内装。'),
                 ('サンライズ大森', '東京都大田区大森西2-3-6', '¥150,000 / 月', '1LDK', 'reserved', '2026-11-01', '単身者歓迎、事務所利用不可', '落ち着いた雰囲気の1LDK。大森駅まで徒歩8分。')
             """
@@ -108,6 +137,15 @@ def get_inquiries():
     return rows
 
 
+def get_reservations():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT r.*, p.name AS property_name FROM reservations r LEFT JOIN properties p ON p.id = r.property_id ORDER BY r.created_at DESC"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
 def find_property_for_message(message):
     text = (message or "").strip()
     if not text:
@@ -128,9 +166,84 @@ def find_property_for_message(message):
     return row
 
 
+def call_openai_for_response(message, property_record=None):
+    if not OPENAI_API_KEY:
+        return None
+
+    property_context = ""
+    if property_record:
+        property_context = (
+            f"物件名: {property_record['name']}\n"
+            f"住所: {property_record['address']}\n"
+            f"賃料: {property_record['rent']}\n"
+            f"間取り: {property_record['layout']}\n"
+            f"状態: {property_record['status']}\n"
+            f"入居可能日: {property_record['available_date']}\n"
+            f"条件: {property_record['requirements']}\n"
+            f"説明: {property_record['description']}"
+        )
+
+    prompt = (
+        "あなたは不動産会社の問い合わせ対応アシスタントです。"
+        "丁寧で親しみやすい日本語で返信してください。"
+        "要点を簡潔にまとめ、内見や資料請求の案内を含めてください。\n\n"
+        f"物件情報:\n{property_context}\n\n"
+        f"ユーザーの問い合わせ:\n{message}"
+    )
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENAI_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = payload["choices"][0]["message"]["content"]
+        return content.strip()
+    except Exception:
+        return None
+
+
+def send_admin_notification(subject, message):
+    if SLACK_WEBHOOK_URL:
+        try:
+            requests.post(SLACK_WEBHOOK_URL, json={"text": f"[{subject}]\n{message}"}, timeout=10)
+        except Exception:
+            pass
+
+    if not ADMIN_EMAIL or not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        return
+
+    try:
+        msg = MIMEText(message, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = ADMIN_EMAIL
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+    except Exception:
+        pass
+
+
 def generate_auto_response(message, property_record=None):
     property_record = property_record or find_property_for_message(message)
     text = (message or "").lower()
+
+    ai_response = call_openai_for_response(message, property_record)
+    if ai_response:
+        return ai_response
 
     if not property_record:
         if any(keyword in text for keyword in ["空室", "空いて", "空き", "まだ空", "空いてる"]):
@@ -149,7 +262,7 @@ def generate_auto_response(message, property_record=None):
                 "内見をご希望でしたら、担当者よりご案内いたします。"
             )
         return (
-            f"ご連絡ありがとうございます。{property_record['name']} は現在満室のため、"
+            f"ご連絡ありがとうございます。{property_record['name']} は��在満室のため、"
             "空室のご案内はできかねます。別の物件や今後の空室予定もご確認できますので、"
             "ご希望条件をお知らせください。"
         )
@@ -194,12 +307,13 @@ def index():
 def inquiry():
     form_data = request.form
     property_record = get_property_by_id(form_data.get("property_id"))
+    auto_response = generate_auto_response(form_data.get("message", ""), property_record)
 
     conn = get_db_connection()
     conn.execute(
         """
-        INSERT INTO inquiries (name, email, phone, property_id, customer_type, message)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO inquiries (name, email, phone, property_id, customer_type, message, auto_response)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             form_data.get("name", "").strip(),
@@ -208,12 +322,23 @@ def inquiry():
             form_data.get("property_id"),
             form_data.get("customer_type", "一般"),
             form_data.get("message", "").strip(),
+            auto_response,
         ),
     )
     conn.commit()
     conn.close()
 
-    auto_response = generate_auto_response(form_data.get("message", ""), property_record)
+    property_name = property_record["name"] if property_record else "未選択"
+    send_admin_notification(
+        "新規お問い合わせ",
+        f"名前: {form_data.get('name', '').strip()}\n"
+        f"メール: {form_data.get('email', '').strip() or '未記入'}\n"
+        f"電話番号: {form_data.get('phone', '').strip() or '未記入'}\n"
+        f"物件: {property_name}\n"
+        f"内容: {form_data.get('message', '').strip()}\n"
+        f"自動返信: {auto_response}",
+    )
+
     return render_template(
         "thanks.html",
         property=property_record,
@@ -228,6 +353,7 @@ def admin():
         "admin.html",
         properties=get_properties(),
         inquiries=get_inquiries(),
+        reservations=get_reservations(),
     )
 
 
@@ -256,6 +382,55 @@ def create_property():
             form_data.get("description", "").strip(),
         ),
     )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
+
+
+@app.route("/reservations/new")
+def new_reservation():
+    return render_template("reservation_form.html", properties=get_properties())
+
+
+@app.route("/reservations", methods=["POST"]) 
+def create_reservation():
+    form = request.form
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT INTO reservations (property_id, name, phone, preferred_date, note, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            form.get("property_id"),
+            form.get("name", "").strip(),
+            form.get("phone", "").strip(),
+            form.get("preferred_date", "").strip(),
+            form.get("note", "").strip(),
+            "pending",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    property_name = get_property_by_id(form.get("property_id"))
+    property_name = property_name["name"] if property_name else "未選択"
+    send_admin_notification(
+        "新規内見予約",
+        f"名前: {form.get('name','').strip()}\n"
+        f"電話番号: {form.get('phone','').strip()}\n"
+        f"物件: {property_name}\n"
+        f"希望日: {form.get('preferred_date','').strip()}\n"
+        f"備考: {form.get('note','').strip() or 'なし'}",
+    )
+    return redirect(url_for("admin"))
+
+
+@app.route("/reservations/<int:reservation_id>/status", methods=["POST"]) 
+def update_reservation_status(reservation_id):
+    status = request.form.get("status", "pending")
+    conn = get_db_connection()
+    conn.execute("UPDATE reservations SET status = ? WHERE id = ?", (status, reservation_id))
     conn.commit()
     conn.close()
     return redirect(url_for("admin"))
