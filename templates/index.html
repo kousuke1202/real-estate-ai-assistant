@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">MVP</p>
+    <h1>不動産の問い合わせを自動対応</h1>
+    <p>物件情報を元に、AI風の自動返信で問い合わせに対応できます。</p>
+  </div>
+</section>
+
+<section class="grid two-col">
+  <div class="panel">
+    <h2>物件一覧</h2>
+    {% for property in properties %}
+      <div class="property-card">
+        <h3>{{ property.name }}</h3>
+        <p><strong>所在地:</strong> {{ property.address }}</p>
+        <p><strong>賃料:</strong> {{ property.rent }}</p>
+        <p><strong>間取り:</strong> {{ property.layout }}</p>
+        <p><strong>状態:</strong> {{ '空室あり' if property.status == 'available' else '満室' }}</p>
+        <p><strong>入居可能:</strong> {{ property.available_date or '相談' }}</p>
+        <p>{{ property.description }}</p>
+      </div>
+    {% else %}
+      <p>まだ物件が登録されていません。</p>
+    {% endfor %}
+  </div>
+
+  <div class="panel">
+    <h2>お問い合わせ</h2>
+    <form action="{{ url_for('inquiry') }}" method="post" class="inquiry-form">
+      <label>
+        お名前
+        <input type="text" name="name" required>
+      </label>
+
+      <label>
+        メールアドレス
+        <input type="email" name="email">
+      </label>
+
+      <label>
+        電話番号
+        <input type="tel" name="phone">
+      </label>
+
+      <label>
+        お客様種別
+        <select name="customer_type">
+          <option value="一般">一般</option>
+          <option value="会社員">会社員</option>
+          <option value="法人">法人</option>
+        </select>
+      </label>
+
+      <label>
+        物件を選択
+        <select name="property_id">
+          <option value="">物件を選択してください</option>
+          {% for property in properties %}
+            <option value="{{ property.id }}">{{ property.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        お問い合わせ内容
+        <textarea name="message" rows="6" placeholder="例: 空室はありますか？内見を希望します。" required></textarea>
+      </label>
+
+      <button type="submit">送信</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

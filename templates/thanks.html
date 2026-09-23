@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="panel thanks-box">
+  <h1>お問い合わせを受け付けました</h1>
+  <p>以下の内容で自動返信を作成しました。</p>
+
+  {% if property %}
+    <div class="result-box">
+      <p><strong>物件:</strong> {{ property.name }}</p>
+      <p><strong>賃料:</strong> {{ property.rent }}</p>
+      <p><strong>間取り:</strong> {{ property.layout }}</p>
+    </div>
+  {% endif %}
+
+  <div class="auto-response">
+    <h2>自動返信</h2>
+    <p>{{ response }}</p>
+  </div>
+
+  <a class="button-link" href="{{ url_for('index') }}">トップへ戻る</a>
+</section>
+{% endblock %}

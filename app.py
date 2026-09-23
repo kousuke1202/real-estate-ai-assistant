@@ -1,0 +1,230 @@
+from flask import Flask, render_template, request, redirect, url_for
+import sqlite3
+from pathlib import Path
+
+app = Flask(__name__)
+DB_PATH = Path("data/real_estate.db")
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = get_db_connection()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS properties (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            rent TEXT NOT NULL,
+            layout TEXT NOT NULL,
+            status TEXT NOT NULL,
+            available_date TEXT,
+            requirements TEXT,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inquiries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT,
+            phone TEXT,
+            property_id INTEGER,
+            customer_type TEXT,
+            message TEXT NOT NULL,
+            auto_response TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+    seed_demo_properties()
+
+
+def seed_demo_properties():
+    conn = get_db_connection()
+    existing = conn.execute("SELECT COUNT(*) FROM properties").fetchone()[0]
+    if existing == 0:
+        conn.execute(
+            """
+            INSERT INTO properties (name, address, rent, layout, status, available_date, requirements, description)
+            VALUES
+                ('レジデンス新宿101', '東京都新宿区西新宿1-1-1', '¥180,000 / 月', '2LDK', 'available', '2026-10-05', '収入条件あり、ペット不可、入居時期相談', '駅徒歩5分の2LDK。南向きで明るく、設備充実。'),
+                ('グリーンハイツ渋谷', '東京都渋谷区道玄坂2-4-8', '¥220,000 / 月', '3LDK', 'available', '2026-10-20', '事務所利用不可、入居時期相談', '都心に位置する3LDK。広いリビングと洗練された内装。'),
+                ('サンライズ大森', '東京都大田区大森西2-3-6', '¥150,000 / 月', '1LDK', 'reserved', '2026-11-01', '単身者歓迎、事務所利用不可', '落ち着いた雰囲気の1LDK。大森駅まで徒歩8分。')
+            """
+        )
+        conn.commit()
+    conn.close()
+
+
+def get_properties():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM properties ORDER BY updated_at DESC, id DESC"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_property_by_id(property_id):
+    if not property_id:
+        return None
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM properties WHERE id = ?", (property_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def get_inquiries():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT i.*, p.name AS property_name FROM inquiries i LEFT JOIN properties p ON p.id = i.property_id ORDER BY i.created_at DESC"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def generate_auto_response(message, property_record):
+    text = (message or "").lower()
+    if not property_record:
+        return (
+            "お問い合わせありがとうございます。ご希望の物件が特定できませんでした。"
+            "物件名かエリアをご指定いただければ、詳細をご案内いたします。"
+        )
+
+    if any(keyword in text for keyword in ["空室", "空いて", "空き", "まだ空", "空いてる"]):
+        if property_record["status"] == "available":
+            return (
+                f"ご連絡ありがとうございます。{property_record['name']} は現在空室がございます。"
+                f"賃料は {property_record['rent']}、間取りは {property_record['layout']}です。"
+                f"入居可能時期は {property_record['available_date']} です。"
+                "内見をご希望でしたら、担当者よりご案内いたします。"
+            )
+        return (
+            f"ご連絡ありがとうございます。{property_record['name']} は現在満室のため、"
+            "空室のご案内はできかねます。別の物件や今後の空室予定もご確認できますので、"
+            "ご希望条件をお知らせください。"
+        )
+
+    if any(keyword in text for keyword in ["家賃", "賃料", "月額"]):
+        return (
+            f"{property_record['name']} の賃料は {property_record['rent']} です。"
+            f"詳細や初期費用についてもご案内可能です。"
+        )
+
+    if any(keyword in text for keyword in ["間取り", "layout"]):
+        return (
+            f"{property_record['name']} の間取りは {property_record['layout']} です。"
+            "ご希望の広さや人数に合うかもしれません。"
+        )
+
+    if any(keyword in text for keyword in ["内見", "見学", "見に行きたい", "予約"]):
+        return (
+            f"内見はご予約可能です。{property_record['available_date']} 以降のご希望日をお知らせください。"
+            "担当者が調整いたします。"
+        )
+
+    if any(keyword in text for keyword in ["条件", "入居条件", "利用条件", "ペット"]):
+        return (
+            f"入居条件は {property_record['requirements']} です。"
+            "ご不明点があれば、個別にご案内いたします。"
+        )
+
+    return (
+        f"ご連絡ありがとうございます。{property_record['name']} は {property_record['address']} に所在し、"
+        f"間取りは {property_record['layout']}、賃料は {property_record['rent']}です。"
+        "必要でしたら、内見予約や詳細資料のご案内も対応可能です。"
+    )
+
+
+@app.route("/")
+def index():
+    return render_template("index.html", properties=get_properties())
+
+
+@app.route("/inquiry", methods=["POST"])
+def inquiry():
+    form_data = request.form
+    property_record = get_property_by_id(form_data.get("property_id"))
+
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT INTO inquiries (name, email, phone, property_id, customer_type, message)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            form_data.get("name", "").strip(),
+            form_data.get("email", "").strip(),
+            form_data.get("phone", "").strip(),
+            form_data.get("property_id"),
+            form_data.get("customer_type", "一般"),
+            form_data.get("message", "").strip(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    auto_response = generate_auto_response(form_data.get("message", ""), property_record)
+    return render_template(
+        "thanks.html",
+        property=property_record,
+        response=auto_response,
+        inquiry=form_data,
+    )
+
+
+@app.route("/admin")
+def admin():
+    return render_template(
+        "admin.html",
+        properties=get_properties(),
+        inquiries=get_inquiries(),
+    )
+
+
+@app.route("/properties/new")
+def new_property():
+    return render_template("property_form.html")
+
+
+@app.route("/properties", methods=["POST"])
+def create_property():
+    form_data = request.form
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT INTO properties (name, address, rent, layout, status, available_date, requirements, description)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            form_data.get("name", "").strip(),
+            form_data.get("address", "").strip(),
+            form_data.get("rent", "").strip(),
+            form_data.get("layout", "").strip(),
+            form_data.get("status", "available"),
+            form_data.get("available_date", "").strip(),
+            form_data.get("requirements", "").strip(),
+            form_data.get("description", "").strip(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
+
+
+if __name__ == "__main__":
+    init_db()
+    app.run(debug=True, host="0.0.0.0", port=5000)

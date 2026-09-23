@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="panel form-panel">
+  <h1>物件追加</h1>
+  <form action="{{ url_for('create_property') }}" method="post" class="property-form">
+    <label>
+      物件名
+      <input type="text" name="name" required>
+    </label>
+
+    <label>
+      所在地
+      <input type="text" name="address" required>
+    </label>
+
+    <label>
+      賃料
+      <input type="text" name="rent" placeholder="例：¥180,000 / 月" required>
+    </label>
+
+    <label>
+      間取り
+      <input type="text" name="layout" placeholder="例：2LDK" required>
+    </label>
+
+    <label>
+      状態
+      <select name="status">
+        <option value="available">空室あり</option>
+        <option value="reserved">満室</option>
+      </select>
+    </label>
+
+    <label>
+      入居可能日
+      <input type="date" name="available_date">
+    </label>
+
+    <label>
+      入居条件
+      <input type="text" name="requirements" placeholder="例：収入条件あり、ペット不可">
+    </label>
+
+    <label>
+      物件説明
+      <textarea name="description" rows="4"></textarea>
+    </label>
+
+    <button type="submit">登録</button>
+  </form>
+</section>
+{% endblock %}

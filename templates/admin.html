@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="panel">
+  <h1>管理画面</h1>
+  <div class="admin-summary">
+    <div>
+      <h3>登録物件数</h3>
+      <p>{{ properties|length }}</p>
+    </div>
+    <div>
+      <h3>お問い合わせ数</h3>
+      <p>{{ inquiries|length }}</p>
+    </div>
+  </div>
+</section>
+
+<section class="grid two-col">
+  <div class="panel">
+    <h2>物件一覧</h2>
+    {% for property in properties %}
+      <div class="property-card">
+        <h3>{{ property.name }}</h3>
+        <p>{{ property.address }}</p>
+        <p>賃料: {{ property.rent }}</p>
+        <p>間取り: {{ property.layout }}</p>
+        <p>状態: {{ property.status }}</p>
+      </div>
+    {% else %}
+      <p>物件はまだありません。</p>
+    {% endfor %}
+  </div>
+
+  <div class="panel">
+    <h2>問い合わせ履歴</h2>
+    {% for inquiry in inquiries %}
+      <div class="inquiry-item">
+        <p><strong>{{ inquiry.name }}</strong>（{{ inquiry.customer_type }}）</p>
+        <p>{{ inquiry.created_at }}</p>
+        <p>物件: {{ inquiry.property_name or '未選択' }}</p>
+        <p>内容: {{ inquiry.message }}</p>
+        <p>自動返信: {{ inquiry.auto_response or '未設定' }}</p>
+      </div>
+    {% else %}
+      <p>問い合わせはまだありません。</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
