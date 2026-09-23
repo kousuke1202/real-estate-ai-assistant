@@ -1,9 +1,21 @@
 from flask import Flask, render_template, request, redirect, url_for
+import os
 import sqlite3
 from pathlib import Path
 
+from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
+from linebot.v3.messaging.models import ReplyMessageRequest, TextMessage
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
+
 app = Flask(__name__)
 DB_PATH = Path("data/real_estate.db")
+
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_CONFIGURATION = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN) if LINE_CHANNEL_ACCESS_TOKEN else None
+handler = WebhookHandler(LINE_CHANNEL_SECRET) if LINE_CHANNEL_SECRET else None
 
 
 def get_db_connection():
@@ -96,12 +108,36 @@ def get_inquiries():
     return rows
 
 
-def generate_auto_response(message, property_record):
+def find_property_for_message(message):
+    text = (message or "").strip()
+    if not text:
+        return None
+
+    query = text.lower()
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT * FROM properties
+        WHERE LOWER(name) LIKE ? OR LOWER(address) LIKE ? OR LOWER(description) LIKE ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (f"%{query}%", f"%{query}%", f"%{query}%"),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def generate_auto_response(message, property_record=None):
+    property_record = property_record or find_property_for_message(message)
     text = (message or "").lower()
+
     if not property_record:
+        if any(keyword in text for keyword in ["空室", "空いて", "空き", "まだ空", "空いてる"]):
+            return "現在の在庫を確認できませんでした。物件名またはエリアをご指定いただければ、空室状況をご案内いたします。"
         return (
-            "お問い合わせありがとうございます。ご希望の物件が特定できませんでした。"
-            "物件名かエリアをご指定いただければ、詳細をご案内いたします。"
+            "お問い合わせありがとうございます。物件名や希望条件をご入力ください。"
+            "例：新宿の2LDK、渋谷の空室、内見希望など。"
         )
 
     if any(keyword in text for keyword in ["空室", "空いて", "空き", "まだ空", "空いてる"]):
@@ -223,6 +259,42 @@ def create_property():
     conn.commit()
     conn.close()
     return redirect(url_for("admin"))
+
+
+@app.route("/line/webhook", methods=["POST"])
+def line_webhook():
+    if not LINE_CHANNEL_SECRET or not LINE_CONFIGURATION:
+        return "LINE is not configured", 500
+
+    signature = request.headers.get("X-Line-Signature", "")
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        return "Invalid signature", 400
+
+    return "OK", 200
+
+
+if handler is not None:
+    @handler.add(MessageEvent)
+    def handle_message(event):
+        if not isinstance(event.message, TextMessageContent):
+            return
+
+        text = event.message.text
+        property_record = find_property_for_message(text)
+        response = generate_auto_response(text, property_record)
+
+        with ApiClient(LINE_CONFIGURATION) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text=response)],
+                )
+            )
 
 
 if __name__ == "__main__":
